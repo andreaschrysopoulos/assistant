@@ -1,7 +1,13 @@
-import Image from "next/image"
+import OpenAI from 'openai'
+import Chat from './components/chat';
 
-export default function Home() {
+export default async function Home() {
+
+
+
   return (
-    <div>Hello World</div>
+    <div className="h-dvh px-5">
+      <Chat />
+    </div>
   )
 }
