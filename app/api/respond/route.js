@@ -2,7 +2,6 @@ import OpenAI from "openai"
 import { neon } from "@neondatabase/serverless"
 
 const client = new OpenAI()
-
 const tools = [{
   "type": "function",
   "name": "reveal_secret",
@@ -24,44 +23,71 @@ const tools = [{
 
 }];
 
-// Update Database with new context
-async function updateDatabase(context) {
-
+// Update Database with whole new context
+async function updateDatabase(newContext) {
   const sql = neon(process.env.DATABASE_URL)
-  const contextJSON = JSON.stringify(context)
-
-  await sql`UPDATE chats SET context = ${contextJSON} WHERE chat_name = 'chat';`
+  await sql`UPDATE chats SET context = ${JSON.stringify(newContext)} WHERE chat_name = 'chat';`
 }
 
-// Input: context, Output: Response or Function Call
+// Push entry to current context
+async function pushToDatabase(entry) {
+  const sql = neon(process.env.DATABASE_URL)
+  await sql`UPDATE chats SET context = context || ${JSON.stringify(entry)} WHERE chat_name = 'chat';`
+}
+
+
 export async function POST(context) {
 
+  // Get JS object
   const input = await context.json()
-  // updateDatabase(await input);
 
-  let completion = await client.responses.create({
+  // Push new entry to database
+  const lastEntry = input.at(-1)
+
+  if (lastEntry.role && lastEntry.role === 'user')
+    await pushToDatabase(input.at(-1))
+
+  // Send to LLM
+  const response = await client.responses.create({
     model: "gpt-4o-mini",
     input: input,
     tools: tools
   })
 
-  // console.log(completion);
+  // Catch potential error in completion response
+  if (response.error)
+    return new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" }, status: 500 })
 
+  const tempContext = []
 
-  // Function Call
-  if (completion?.output[0]?.type === "function_call") {
+  for (const output of response.output) {
 
-    const functionReturn = "This is the hidden secret: The rabbit is jumping";
+    switch (output.type) {
 
-    updateDatabase([...await input, ...completion.output, { type: "function_call_output", call_id: completion.output[0].call_id, output: functionReturn }])
+      case "function_call":
+        // Push function_call to local context and database
+        tempContext.push(output)
+        await pushToDatabase(output)
 
-    // Message
-  } else if (completion?.output[0]?.type === "message") {
-    updateDatabase([...await input, { type: 'message', role: 'assistant', content: completion.output_text }]);
+        // Execute function*
+        const functionOutput = { type: "function_call_output", call_id: output.call_id, output: "The hidden secret is love" }
+
+        // Push function_output to local context and database
+        tempContext.push(functionOutput)
+        await pushToDatabase(functionOutput)
+        console.log("hello!");
+        continue
+
+      case "message":
+
+        const assistantMessage = { type: 'message', role: 'assistant', content: output.content[0].text }
+
+        // Push assistant reply to local context and database
+        tempContext.push(assistantMessage)
+        await pushToDatabase(assistantMessage)
+    }
   }
 
-  return new Response(
-    JSON.stringify(completion),
-    { headers: { "Content-Type": "application/json" } }
-  )
+  return new Response(JSON.stringify(tempContext), { headers: { "Content-Type": "application/json" } })
+
 }

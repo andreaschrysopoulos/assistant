@@ -5,90 +5,118 @@ import { useRef, useEffect, useState } from "react";
 export default function Chat() {
   const textarea = useRef()
   const button = useRef()
+  const chatRef = useRef({})
+  const [chat, setChat] = useState({})
 
-  const [chatName, setChatName] = useState()
-  const [chatId, setChatId] = useState()
-  const [context, setContext] = useState([])
-
-  async function fetchHistory() {
-    const res = await fetch('/api/getChat');
-    if (res.ok) {
-      const data = await res.json();
-      setChatName(data.chat_name);
-      setChatId(data.id);
-      setContext(data.context);
-      return data.context;
-    }
-  }
-
+  // Page load hook
   useEffect(() => {
-    fetchHistory();
+    // Pull fresh data from DB
+    pullChatFromDB();
+
+    // Focus on the textbox when the user presses a key
+    const focusOnTextarea = (event) => {
+      const tag = document.activeElement.tagName.toLowerCase();
+      if (tag !== 'input' && tag !== 'textarea') {
+        textarea.current.focus();
+      }
+      textarea.current.focus()
+    };
+    window.addEventListener('keydown', focusOnTextarea);
+    return () => {
+      window.removeEventListener('keydown', focusOnTextarea);
+    };
+
   }, []);
 
+  // Pull fresh data from database
+  async function pullChatFromDB() {
+    const res = await fetch('/api/getChat')
+    if (res.ok) {
+      chatRef.current = await res.json()
+      setChat(chatRef.current);
+    } else
+      console.error('error pulling data from database')
+  }
 
+  // Debugging
   useEffect(() => {
-    console.log(`Chat ID: ${chatId}`)
-    console.log(`Chat Name: "${chatName}"`)
-    console.log("Chat Messages: ", context)
-  }, [chatId, chatName, context]);
+    console.log(chat);
+  }, [chat])
 
+  // Clear Chat
   async function clearChat() {
 
+    // Send PATCH to backend and then the DB
     const res = await fetch('/api/clearChat', {
       method: 'PATCH'
     })
-    console.log(res);
-    if (res.ok) {
-      fetchHistory();
-    }
 
+    if (res.ok) {
+      pullChatFromDB();
+      return { ok: true }
+    }
+    else
+      return { ok: false }
   }
 
+  // Weird solution to stale state
+  function syncChat() {
+    setChat({
+      ...chatRef.current,
+      context: [...chatRef.current.context]
+    });
+  }
+
+  // Respond to chatRef.current.context
   async function respond(event) {
     event.preventDefault();
 
     if (textarea.current.value.trim()) {
-
-      const message = textarea.current.value;
-      textarea.current.value = '';
+      // Disable send button, so nothing is sent while the assistant is responding
       button.current.disabled = true;
 
-      let tempContext = [...context, { type: 'message', role: 'user', content: message }]
+      // Update local chat with new user message
+      chatRef.current.context.push({ type: 'message', role: 'user', content: textarea.current.value })
+      syncChat()
 
-      setContext(tempContext)
+      // Clear the textbox
+      textarea.current.value = ''
 
-
-      // Talk to backend:
+      // Send current context to backend for response
       let res = await fetch('/api/respond', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tempContext)
+        body: JSON.stringify(chatRef.current.context)
       })
 
-      let reply;
 
       while (true) {
-        reply = await res.json();
-        // Intercept to check for a funtion call
-        if (reply.output[0]?.type === 'message') {
-          fetchHistory();
-          break;
+
+        res = await res.json();
+
+        // ASSUMING! if last output element is message, the turn finished
+        if (res.at(-1).type === 'message') {
+          chatRef.current.context.push(...res)
+          syncChat()
+          break
         }
-        else if (reply.output[0]?.type === 'function_call') {
-          tempContext = await fetchHistory()
+
+        // If it's not a message, so *probably* a function_call_output, send context back for an answer
+        else {
+          chatRef.current.context.push(...res)
+          syncChat()
+
           res = await fetch('/api/respond', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(tempContext)
+            body: JSON.stringify(chatRef.current.context)
           })
+
         }
       }
 
       button.current.disabled = false;
-
-
-    } else
-      return
+    }
   }
 
   return (
@@ -107,20 +135,26 @@ export default function Chat() {
       {/* Messages */}
       <div className="w-full overflow-y-auto dark:scheme-dark h-full px-5">
         <div className="flex flex-col max-w-3xl mx-auto my-4">
-          {context.map((entry, index) => (
-            entry.type === 'message' ? (
-              entry.role === 'assistant' ?
-                // Assistant Message
-                <div key={index} className="pr-3 py-1.5 w-fit mb-4">{entry.content}</div>
-                :
-                // User Message
-                <div key={index} className="rounded-2xl px-3 py-1.5 self-end w-fit max-w-[70%] bg-stone-200/60 dark:bg-stone-800 mb-4">{entry.content}</div>)
-              : entry.type === 'function_call' ?
-                // Function Call
-                <div key={index} className="pr-3 py-1.5 w-fit opacity-50 italic">{`Function call: ${entry.name}`}</div>
+
+          {chat.context?.map((entry, index) => (
+            // message
+            entry.type === 'message'
+
+              // role assistant
+              ? (entry.role === 'assistant'
+                ? <div key={index} className="pr-3 py-1.5 w-fit mb-4">{entry.content}</div>
+
+                // role user
+                : <div key={index} className="rounded-2xl px-3 py-1.5 self-end w-fit max-w-[70%] bg-stone-200/60 dark:bg-stone-800 mb-4">{entry.content}</div>
+              )
+
+              // function call
+              : entry.type === 'function_call'
+                ? <div key={index} className="pr-3 py-1.5 w-fit opacity-50 italic">{`Function call: ${entry.name}`}</div>
+
+                // other
                 : null
-          ))
-          }
+          ))}
         </div>
       </div>
 
