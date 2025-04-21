@@ -1,12 +1,9 @@
-import OpenAI from 'openai'
 import Chat from './components/chat';
 
-export default async function Home() {
-
-
+export default function Home() {
 
   return (
-    <div className="h-dvh px-5">
+    <div className="">
       <Chat />
     </div>
   )
