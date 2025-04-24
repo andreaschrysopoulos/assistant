@@ -4,8 +4,8 @@ import { neon } from "@neondatabase/serverless"
 const client = new OpenAI()
 const tools = [{
   "type": "function",
-  "name": "reveal_secret",
-  "description": "Given the right magic word, the function will return the hidden secret.",
+  "name": "access_memory_file",
+  "description": "You can use this function to access the stored memory ",
   "strict": false,
   "parameters": {
     "type": "object",
@@ -26,14 +26,16 @@ const tools = [{
 // Update Database with whole new context
 async function updateDatabase(newContext) {
   const sql = neon(process.env.DATABASE_URL)
-  await sql`UPDATE chats SET context = ${JSON.stringify(newContext)} WHERE chat_name = 'chat';`
+  await sql`UPDATE main_table SET entry_jsonb = ${JSON.stringify(newContext)} WHERE entry_name = 'context_window';`
 }
 
 // Push entry to current context
 async function pushToDatabase(entry) {
   const sql = neon(process.env.DATABASE_URL)
-  await sql`UPDATE chats SET context = context || ${JSON.stringify(entry)} WHERE chat_name = 'chat';`
+  await sql`UPDATE main_table SET entry_jsonb = entry_jsonb || ${JSON.stringify(entry)} WHERE entry_name = 'context_window';`
 }
+
+
 
 
 export async function POST(context) {
@@ -43,13 +45,29 @@ export async function POST(context) {
 
   // Push new entry to database
   const lastEntry = input.at(-1)
-
   if (lastEntry.role && lastEntry.role === 'user')
     await pushToDatabase(input.at(-1))
 
+  // Always update the context window with the current system message
+  const sql = neon(process.env.DATABASE_URL)
+  const data = await sql`SELECT entry_text FROM main_table WHERE entry_name = 'memory_file';`
+
+  if (data[0].entry_text) {
+    if (input[0].role === 'system') {
+      input.shift()
+      input.unshift({ type: 'message', role: 'system', content: data[0].entry_text })
+    }
+    else {
+      input.unshift({ type: 'message', role: 'system', content: data[0].entry_text })
+    }
+  }
+
+  await updateDatabase(input);
+
+
   // Send to LLM
   const response = await client.responses.create({
-    model: "gpt-4o-mini",
+    model: "gpt-4o",
     input: input,
     tools: tools
   })
@@ -75,7 +93,7 @@ export async function POST(context) {
         // Push function_output to local context and database
         tempContext.push(functionOutput)
         await pushToDatabase(functionOutput)
-        console.log("hello!");
+
         continue
 
       case "message":

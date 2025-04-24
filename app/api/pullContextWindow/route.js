@@ -1,17 +1,17 @@
 import { neon } from "@neondatabase/serverless";
 
-async function getData() {
+async function pullContextWindow() {
   const sql = neon(process.env.DATABASE_URL);
-  const data = await sql`SELECT * FROM chats LIMIT 1;`;
+  const data = await sql`SELECT entry_jsonb FROM main_table WHERE entry_name = 'context_window';`;
 
-  return data[0];
+  return data[0].entry_jsonb;
 }
 
 export async function GET() {
 
-  const data = await getData()
+  const data = await pullContextWindow()
 
-  if (data.id && data.chat_name && Array.isArray(data.context))
+  if (Array.isArray(data))
     return new Response(
       JSON.stringify(data, null, 2),
       { headers: { "Content-Type": "application/json" } }

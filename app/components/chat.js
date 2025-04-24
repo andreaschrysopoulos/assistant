@@ -5,8 +5,9 @@ import { useRef, useEffect, useState } from "react";
 export default function Chat() {
   const textarea = useRef()
   const button = useRef()
-  const chatRef = useRef({})
-  const [chat, setChat] = useState({})
+  const contextWindowRef = useRef([])
+  const scrollable = useRef()
+  const [contextWindow, setContextWindow] = useState([])
 
   // Page load hook
   useEffect(() => {
@@ -26,33 +27,37 @@ export default function Chat() {
       window.removeEventListener('keydown', focusOnTextarea);
     };
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Pull fresh data from database
   async function pullChatFromDB() {
-    const res = await fetch('/api/getChat')
+    const res = await fetch('/api/pullContextWindow')
     if (res.ok) {
-      chatRef.current = await res.json()
-      setChat(chatRef.current);
+      contextWindowRef.current = await res.json()
+      syncChat();
     } else
       console.error('error pulling data from database')
   }
 
   // Debugging
   useEffect(() => {
-    console.log(chat);
-  }, [chat])
+    // Scroll to the bottom of the chat
+    scrollable.current.scrollTop = scrollable.current.scrollHeight;
+    console.log(contextWindow);
+  }, [contextWindow])
 
   // Clear Chat
   async function clearChat() {
 
     // Send PATCH to backend and then the DB
-    const res = await fetch('/api/clearChat', {
+    const res = await fetch('/api/clearContextWindow', {
       method: 'PATCH'
     })
 
     if (res.ok) {
-      pullChatFromDB();
+      contextWindowRef.current = []
+      syncChat();
       return { ok: true }
     }
     else
@@ -61,13 +66,9 @@ export default function Chat() {
 
   // Weird solution to stale state
   function syncChat() {
-    setChat({
-      ...chatRef.current,
-      context: [...chatRef.current.context]
-    });
+    setContextWindow([...contextWindowRef.current]);
   }
 
-  // Respond to chatRef.current.context
   async function respond(event) {
     event.preventDefault();
 
@@ -76,7 +77,7 @@ export default function Chat() {
       button.current.disabled = true;
 
       // Update local chat with new user message
-      chatRef.current.context.push({ type: 'message', role: 'user', content: textarea.current.value })
+      contextWindowRef.current.push({ type: 'message', role: 'user', content: textarea.current.value })
       syncChat()
 
       // Clear the textbox
@@ -86,7 +87,7 @@ export default function Chat() {
       let res = await fetch('/api/respond', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(chatRef.current.context)
+        body: JSON.stringify(contextWindowRef.current)
       })
 
 
@@ -96,20 +97,20 @@ export default function Chat() {
 
         // ASSUMING! if last output element is message, the turn finished
         if (res.at(-1).type === 'message') {
-          chatRef.current.context.push(...res)
+          contextWindowRef.current.push(...res)
           syncChat()
           break
         }
 
         // If it's not a message, so *probably* a function_call_output, send context back for an answer
         else {
-          chatRef.current.context.push(...res)
+          contextWindowRef.current.push(...res)
           syncChat()
 
           res = await fetch('/api/respond', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(chatRef.current.context)
+            body: JSON.stringify(contextWindowRef.current)
           })
 
         }
@@ -133,10 +134,10 @@ export default function Chat() {
       </div>
 
       {/* Messages */}
-      <div className="w-full overflow-y-auto dark:scheme-dark h-full px-5">
+      <div ref={scrollable} className="w-full overflow-y-auto dark:scheme-dark h-full px-5">
         <div className="flex flex-col max-w-3xl mx-auto my-4">
 
-          {chat.context?.map((entry, index) => (
+          {contextWindow?.map((entry, index) => (
             // message
             entry.type === 'message'
 
@@ -145,7 +146,9 @@ export default function Chat() {
                 ? <div key={index} className="pr-3 py-1.5 w-fit mb-4">{entry.content}</div>
 
                 // role user
-                : <div key={index} className="rounded-2xl px-3 py-1.5 self-end w-fit max-w-[70%] bg-stone-200/60 dark:bg-stone-800 mb-4">{entry.content}</div>
+                : entry.role === 'user'
+                  ? <div key={index} className="rounded-2xl px-3 py-1.5 self-end w-fit max-w-[70%] bg-stone-200/60 dark:bg-stone-800 mb-4">{entry.content}</div>
+                  : null
               )
 
               // function call
