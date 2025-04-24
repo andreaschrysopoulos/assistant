@@ -153,7 +153,7 @@ export default function Chat() {
 
               // function call
               : entry.type === 'function_call'
-                ? <div key={index} className="pr-3 py-1.5 w-fit opacity-50 italic">{`Function call: ${entry.name}`}</div>
+                ? <div key={index} className="pr-3 py-1.5 w-fit opacity-50 italic">{'Memory updated'}</div>
 
                 // other
                 : null

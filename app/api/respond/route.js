@@ -4,18 +4,18 @@ import { neon } from "@neondatabase/serverless"
 const client = new OpenAI()
 const tools = [{
   "type": "function",
-  "name": "access_memory_file",
-  "description": "You can use this function to access the stored memory ",
+  "name": "update_memory_file",
+  "description": "You can use this function to update the stored memory.",
   "strict": false,
   "parameters": {
     "type": "object",
     "required": [
-      "magic_word"
+      "updated_memory_content"
     ],
     "properties": {
-      "magic_word": {
+      "updated_memory_content": {
         "type": "string",
-        "description": "The word required to reveal the secret."
+        "description": "The updated memory content."
       }
     },
     "additionalProperties": false
@@ -35,6 +35,12 @@ async function pushToDatabase(entry) {
   await sql`UPDATE main_table SET entry_jsonb = entry_jsonb || ${JSON.stringify(entry)} WHERE entry_name = 'context_window';`
 }
 
+// Update memory file
+async function updateMemory(contents) {
+  const sql = neon(process.env.DATABASE_URL)
+  await sql`UPDATE main_table SET entry_text = ${contents} WHERE entry_name = 'memory_file';`
+}
+
 
 
 
@@ -50,24 +56,20 @@ export async function POST(context) {
 
   // Always update the context window with the current system message
   const sql = neon(process.env.DATABASE_URL)
-  const data = await sql`SELECT entry_text FROM main_table WHERE entry_name = 'memory_file';`
+  const system_message = (await sql`SELECT entry_text FROM main_table WHERE entry_name = 'system_message';`)[0].entry_text || ''
+  const memory_file = (await sql`SELECT entry_text FROM main_table WHERE entry_name = 'memory_file';`)[0].entry_text || ''
 
-  if (data[0].entry_text) {
-    if (input[0].role === 'system') {
-      input.shift()
-      input.unshift({ type: 'message', role: 'system', content: data[0].entry_text })
-    }
-    else {
-      input.unshift({ type: 'message', role: 'system', content: data[0].entry_text })
-    }
-  }
+  if (input[0].role === 'system')
+    input.shift()
+
+  const now = new Date().toISOString();
+  input.unshift({ type: 'message', role: 'system', content: `Current date and time: "${now}", System Message: "${system_message}", Memory file: "${memory_file}"` })
 
   await updateDatabase(input);
 
-
   // Send to LLM
   const response = await client.responses.create({
-    model: "gpt-4o",
+    model: "gpt-4.1",
     input: input,
     tools: tools
   })
@@ -84,11 +86,18 @@ export async function POST(context) {
 
       case "function_call":
         // Push function_call to local context and database
-        tempContext.push(output)
+        tempContext.push({ ...output, arguments: "{}" })
         await pushToDatabase(output)
 
+        // Parse arguments as JSON
+        const newMemory = JSON.parse(output.arguments).updated_memory_content
+        console.log(newMemory);
+
+        // Call the function to update memory
+        await updateMemory(newMemory)
+
         // Execute function*
-        const functionOutput = { type: "function_call_output", call_id: output.call_id, output: "The hidden secret is love" }
+        const functionOutput = { type: "function_call_output", call_id: output.call_id, output: "Memory updated successfully." }
 
         // Push function_output to local context and database
         tempContext.push(functionOutput)
